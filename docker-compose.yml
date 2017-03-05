@@ -2,6 +2,7 @@ version: '2'
 services:
   app:
     image: friendsofsymfony/fos-http-cache
+    build: docker/
     volumes:
       - .:/foshttpcache
     working_dir: /foshttpcache

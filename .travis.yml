@@ -1,6 +1,10 @@
+sudo: required
 dist: trusty
 group: edge
 language: php
+
+services:
+  - docker
 
 php:
   - 5.6
@@ -9,13 +13,16 @@ php:
 
 env:
   - VARNISH_VERSION=5.0.0
+    VARNISH_MODULES_VERSION=0.11.0
+    NGINX_VERSION=1.9.15
+    NGINX_CACHE_PURGE_VERSION=2.3
 
 matrix:
   include:
     - php: 5.6
-      env: SYMFONY_VERSION=2.7.* VARNISH_VERSION=3.0 COMPOSER_FLAGS="--prefer-lowest"
+      env: SYMFONY_VERSION=2.7.* VARNISH_VERSION=3.0.0 COMPOSER_FLAGS="--prefer-lowest"
     - php: 7.0
-      env: VARNISH_VERSION=4.1
+      env: VARNISH_VERSION=4.1.5
 
 branches:
   only:
@@ -23,34 +30,16 @@ branches:
     # Build maintenance branches for older releases if needed. such branches should be named like "1.2"
     - '/^\d+\.\d+$/'
 
-install:
-  - composer update $COMPOSER_FLAGS --prefer-source --no-interaction
-
 before_script:
-  # Install Varnish
-  - |
-    set -e
-    if [ "$VARNISH_VERSION" = "5.0.0" ]; then
-      wget https://repo.varnish-cache.org/pkg/${VARNISH_VERSION}/varnish_${VARNISH_VERSION}-1_amd64.deb
-      sudo apt-get install -qq libjemalloc1
-      sudo dpkg -i varnish_${VARNISH_VERSION}-1_amd64.deb
-      sudo apt-get update -qq
-      sudo apt-get -f install
-    else
-      curl http://repo.varnish-cache.org/debian/GPG-key.txt | sudo apt-key add -
-      echo "deb https://repo.varnish-cache.org/ubuntu/ trusty varnish-${VARNISH_VERSION}" | sudo tee -a /etc/apt/sources.list
-      sudo apt-get update -qq
-      sudo apt-get install -qq varnish
-    fi
+  - sed -i -e "s/FROM .*/FROM php:${TRAVIS_PHP_VERSION}-alpine/" docker/Dockerfile
+  - env > docker/.env
+  - docker build -t "friendsofsymfony/http-cache-ci:php-${TRAVIS_PHP_VERSION}" docker/
   - sudo apt-get install -qq python-sphinx enchant
   - sudo pip install -r doc/requirements.txt
-  # Install NGINX
-  - sh ./tests/install-nginx.sh
-  # Starting webserver
-  - if [ "$TRAVIS_PHP_VERSION" = 'hhvm' ]; then ./tests/ci/install-apache-hhvm.sh; fi
 
 script:
-  - vendor/bin/phpunit --coverage-clover=coverage.clover
+  - docker run -v `pwd`:/app "friendsofsymfony/http-cache-ci:php-${TRAVIS_PHP_VERSION}" sh -c "varnishd -f /app/tests/Functional/Fixtures/varnish/fos.vcl -p vcl_dir=/app/tests/Functional/Fixtures/varnish/"
+  - docker run -v `pwd`:/app "friendsofsymfony/http-cache-ci:php-${TRAVIS_PHP_VERSION}" sh -c "composer update $COMPOSER_FLAGS --prefer-source --no-interaction && vendor/bin/phpunit --coverage-clover=coverage.clover"
   - make -C doc SPHINXOPTS='-nW' html
   - make -C doc spelling
 
@@ -59,11 +48,3 @@ after_script:
   # and the XDebug API is not implemented in HHVM 3.5) and we don't want to cancel the Scrutinizer analysis by notifying
   # it than no coverage data is available
   - if [[ "$TRAVIS_PHP_VERSION" != "7" && "$TRAVIS_PHP_VERSION" != "hhvm" ]]; then wget https://scrutinizer-ci.com/ocular.phar && php ocular.phar code-coverage:upload --format=php-clover coverage.clover; fi
-
-after_failure:
-  - cat /tmp/fos_nginx_error.log
-  - cat /tmp/fos_nginx_access.log
-  - cat /tmp/hhvm.log
-  - sudo cat /var/log/apache2/error.log
-  - sudo cat /var/log/apache2/access.log
-  - sudo cat /var/log/apache2/other_vhosts_access.log
